@@ -23,6 +23,33 @@ recorder reports failure/discard explicitly; the editor acknowledges completion
 after the project's duration and automatic-zoom saves. Waiting never controls
 capture, and timing out or cancelling a request leaves the take running.
 
+### A take started from the editor
+
+A take can also start from the editor's Rec tab, and then it belongs to the project
+on screen rather than to a new one. The only state that carries that across the
+window hand-off is `pendingTakeTargetProjectId` in `electron/ipc/handlers.ts`: it sits
+beside the session slot, is armed only by `start-new-recording` (every call overwrites
+it, `null` when absent), and is returned beside the session by
+`get-current-recording-session`. It is deliberately not a field on `RecordingSession`
+and never reaches `.session.json`, because those manifests are read back as live
+sessions by `loadRecordedSessionForVideoPath` — a persisted target would resurface
+later and point an unrelated project's video at a stale project. It is retired when the
+session slot is set to `null` (which the import does once it has consumed the take),
+when a take ends in any non-`ready` outcome, and on every project-file load, so a
+target cannot outlive the recording it was armed for.
+
+The editor imports such a take by appending to that project: `loadProject` the target,
+then ask the store afterwards whether it landed — `loadProject` reports failure by
+setting `status` and returning, it never throws, so a fallback written as `try/catch`
+would be dead code — keep the live document when it already is that project rather
+than reloading over edits made since the take started, `addAsset`, and then
+`useTimeline.appendTakeClip` places one clip after the last and runs the background
+duration probe. The probe is load-bearing rather than defensive: `addAsset` never sets
+`durationSec`, and `Preview` mounts only the primary asset, so no `loadedmetadata`
+arrives for a later take and its clip would stay at the 60 s placeholder. Automatic
+zoom decoration is keyed by asset, not by project, so a project that already holds
+zooms still gets them for the take that just landed.
+
 ## The HUD
 
 `LaunchWindow` is the recording controller. Its control row exposes recording, pause, source, microphone, system-audio, webcam, cursor, settings, and stop/restart actions through the HUD controls. The overlay is click-through, so it does not intercept the application being recorded — but it is never *born* that way: the renderer asks for it on mount over `hud-overlay-ignore-mouse-events`, and `electron/windows.ts` applies it as `setIgnoreMouseEvents(ignore)`, with no `{ forward: true }`. While the window is input-transparent Chromium delivers it no pointer events at all, so the way back out is a poll: the main process samples the OS cursor and pushes the window-relative point over `hud-overlay-cursor`, and the renderer hit-tests it to decide when the HUD's own controls temporarily opt into pointer handling. On Linux none of this runs: `setIgnoreMouseEvents` is a no-op there, so the renderer never asks for click-through and the HUD stays interactive — which is why its drag region sits on the grab handle rather than on the transparent root. (Until #385 the lift was Electron's `{ forward: true }` — a global `WH_MOUSE_LL` hook on Windows that Windows can revoke without telling the app, leaving the HUD painted and permanently dead. The poll replaced it.)
