@@ -435,8 +435,31 @@ export function NewEditorShell() {
 		void (async () => {
 			if (!window.electronAPI) return;
 			try {
-				if (await importPendingRecording((warning) => toast.warning(warning))) {
-					toast.success("Recording added to a new project");
+				if (
+					await importPendingRecording((warning) => toast.warning(warning), {
+						// The append itself lives in `useTimeline` because it needs the clip
+						// selection and the background duration probe, and this module has no
+						// hook access.
+						appendTakeClip: tl.appendTakeClip,
+						// Same reason: the import knows the take lost its project, not what to
+						// call that in the user's language.
+						onTargetUnavailable: () => toast.warning(te("recording.targetProjectUnavailable")),
+						onImported: (take) => {
+							if (take.appended) {
+								toast.success(
+									te("recording.takeAdded", {
+										number: take.takeNumber,
+										project: take.projectTitle,
+									}),
+								);
+							} else if (take.takeNumber === 1) {
+								toast.success(te("recording.addedToNewProject"));
+							}
+							// A later take with no clip placed: `saveDocument` already reported the
+							// failed write, and the asset is in the media panel either way.
+						},
+					})
+				) {
 					return;
 				}
 			} catch (err) {
@@ -473,7 +496,7 @@ export function NewEditorShell() {
 				console.warn("[editor] auto-load failed", e);
 			}
 		})();
-	}, [loadProject]);
+	}, [loadProject, te, tl.appendTakeClip]);
 
 	// Warn on close when dirty
 	useEffect(() => {
@@ -1030,9 +1053,11 @@ export function NewEditorShell() {
 				}
 				if (unsavedPromptRef.current !== prompt) return;
 				if (action === "record") {
-					void window.electronAPI?.startNewRecording?.().catch((err) => {
-						console.warn("[editor] failed to start a new recording:", err);
-					});
+					void window.electronAPI
+						?.startNewRecording?.(useProjectStore.getState().projectId ?? undefined)
+						.catch((err) => {
+							console.warn("[editor] failed to start a new recording:", err);
+						});
 				}
 				settle(choice);
 			})();
@@ -1043,9 +1068,13 @@ export function NewEditorShell() {
 	const handleNewRecording = useCallback(async () => {
 		const choice = await promptUnsaved("record");
 		if (choice !== "cancel") {
-			void window.electronAPI?.startNewRecording?.().catch((err) => {
-				console.warn("[editor] failed to start a new recording:", err);
-			});
+			// The project on screen is where this take lands. The main process keeps it
+			// beside the recording session and hands it back when the editor reopens.
+			void window.electronAPI
+				?.startNewRecording?.(useProjectStore.getState().projectId ?? undefined)
+				.catch((err) => {
+					console.warn("[editor] failed to start a new recording:", err);
+				});
 		}
 	}, [promptUnsaved]);
 

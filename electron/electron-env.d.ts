@@ -53,7 +53,10 @@ interface Window {
 		getSources: (opts: Electron.SourcesOptions) => Promise<ProcessedDesktopSource[]>;
 		switchToEditor: () => Promise<void>;
 		switchToHud: () => Promise<void>;
-		startNewRecording: () => Promise<{ success: boolean; error?: string }>;
+		startNewRecording: (
+			/** The project the take is being recorded into; omitted for a new project. */
+			targetProjectId?: string,
+		) => Promise<{ success: boolean; error?: string }>;
 		openSourceSelector: () => Promise<{
 			opened: boolean;
 			reason?: string;
@@ -387,6 +390,8 @@ interface Window {
 			canceled?: boolean;
 			/** Why this recording ended before it was stopped, when it did. */
 			warning?: string;
+			/** The project an editor-started take belongs to, when it was started from one. */
+			targetProjectId?: string;
 		}>;
 		findRecordingCamera: (videoPath: string) => Promise<{
 			success: boolean;

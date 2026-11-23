@@ -53,7 +53,10 @@
 		"permissionDenied": "Autorizzazione di registrazione negata. Consenti la registrazione dello schermo.",
 		"accessibilityAllowAndRetry": "Consenti l'accesso all'accessibilità per OpenScreen, poi premi di nuovo registra per avviare il conto alla rovescia.",
 		"cursorAccessibilityUnavailable": "L'accesso all'accessibilità è disattivato. La registrazione continuerà, ma gli effetti del cursore potrebbero essere limitati. Attivalo nelle Impostazioni di Sistema per usare tutti gli effetti del cursore.",
-		"selectSource": "Seleziona una sorgente da registrare"
+		"selectSource": "Seleziona una sorgente da registrare",
+		"takeAdded": "Ripresa {{number}} aggiunta a {{project}}",
+		"addedToNewProject": "Registrazione aggiunta a un nuovo progetto",
+		"targetProjectUnavailable": "Non è stato possibile aprire il progetto di questa ripresa. La ripresa è stata salvata in un nuovo progetto."
 	},
 	"emptyState": {
 		"title": "Nessun progetto aperto",

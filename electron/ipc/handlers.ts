@@ -726,6 +726,18 @@ let lastEnumeratedSources = new Map<string, DesktopCapturerSource>();
 const selectSourceGeneration = { value: 0 };
 let currentProjectPath: string | null = null;
 let currentRecordingSession: RecordingSession | null = null;
+/**
+ * The project an editor-started take belongs to, handed back to the editor beside
+ * the session so the take is appended instead of opening a project of its own.
+ *
+ * Only the `start-new-recording` IPC — the editor's Rec tab — arms it. The MCP take
+ * runner and the tray reach the same function without a target, which clears it, and
+ * the HUD's own record button never goes through it at all. It is deliberately NOT
+ * stored on the session or in the `.session.json` manifest: those manifests are read
+ * back as live sessions by `loadRecordedSessionForVideoPath`, so a persisted target
+ * would resurface later and point an unrelated project's video at a stale project.
+ */
+let pendingTakeTargetProjectId: string | null = null;
 
 // Durable source of truth for the mic/camera/system-audio/cursor/source
 // choices a user makes in the editor's Rec-mode stage, so the HUD window's
@@ -1835,6 +1847,10 @@ function waitForNativeMacCaptureStart(proc: ChildProcessWithoutNullStreams) {
 function setCurrentRecordingSessionState(session: RecordingSession | null) {
 	currentRecordingSession = session;
 	currentVideoPath = session?.screenVideoPath ?? null;
+	// The target belongs to the take in the slot. Emptying the slot retires it, which
+	// is what the editor's import does once it has consumed the take — and what makes
+	// a stale target unable to outlive the recording it was armed for.
+	if (!session) pendingTakeTargetProjectId = null;
 }
 
 function getSessionManifestPathForVideo(videoPath: string) {
@@ -2660,9 +2676,17 @@ export function registerIpcHandlers(
 		return { success: true };
 	});
 
-	/** The editor's Record button: over to the HUD, which starts the take by itself. */
-	function startNewRecording() {
+	/**
+	 * The editor's Record button: over to the HUD, which starts the take by itself.
+	 *
+	 * `targetProjectId` is the project the take is being added to. It is overwritten on
+	 * every call (`null` when absent) rather than kept, so a take that did not come
+	 * from an open project can never inherit one.
+	 */
+	function startNewRecording(targetProjectId?: string | null) {
 		assertWindowsUpdateIdle();
+		pendingTakeTargetProjectId =
+			typeof targetProjectId === "string" && targetProjectId.trim() ? targetProjectId.trim() : null;
 		_switchToHud?.();
 		const hudWindow = getMainWindow();
 		if (hudWindow && !hudWindow.isDestroyed()) {
@@ -2674,8 +2698,9 @@ export function registerIpcHandlers(
 			}
 		}
 	}
-	ipcMain.handle("start-new-recording", () => {
-		startNewRecording();
+	ipcMain.handle("start-new-recording", (_, input?: { targetProjectId?: unknown }) => {
+		const requested = input && typeof input === "object" ? input.targetProjectId : undefined;
+		startNewRecording(typeof requested === "string" ? requested : undefined);
 		return { success: true };
 	});
 
@@ -5107,6 +5132,9 @@ export function registerIpcHandlers(
 					sessionError,
 				);
 			}
+			// Opening a project is not a take: a target armed for the editor's take is
+			// spent with the slot.
+			pendingTakeTargetProjectId = null;
 			setCurrentRecordingSessionState(session);
 
 			return {
@@ -5170,6 +5198,7 @@ export function registerIpcHandlers(
 					sessionError,
 				);
 			}
+			pendingTakeTargetProjectId = null;
 			setCurrentRecordingSessionState(session);
 			return {
 				success: true,
@@ -5199,6 +5228,7 @@ export function registerIpcHandlers(
 
 			const content = await fs.readFile(currentProjectPath, "utf-8");
 			const project = JSON.parse(content);
+			pendingTakeTargetProjectId = null;
 			setCurrentRecordingSessionState(await getApprovedProjectSession(project, currentProjectPath));
 			return {
 				success: true,
@@ -5255,6 +5285,8 @@ export function registerIpcHandlers(
 		if (!parsed.success) return { success: false };
 		const outcome = parsed.data;
 		if (outcome.status !== "ready") {
+			// The take went nowhere, so the project it was meant for is spent with it.
+			pendingTakeTargetProjectId = null;
 			recordingCompletion.failed(outcome.recordingId, outcome.message);
 			mcpAppRecorder.recordingFinished(outcome.recordingId);
 			return { success: true };
@@ -5274,7 +5306,15 @@ export function registerIpcHandlers(
 			nativeRecordingWarning?.screenVideoPath === currentRecordingSession.screenVideoPath
 				? nativeRecordingWarning.message
 				: undefined;
-		return { success: true, session: currentRecordingSession, ...(warning ? { warning } : {}) };
+		return {
+			success: true,
+			session: currentRecordingSession,
+			...(warning ? { warning } : {}),
+			// Beside the session, not inside it: the editor appends the take here instead
+			// of creating a project. Absent for any take that was not started from an
+			// open project.
+			...(pendingTakeTargetProjectId ? { targetProjectId: pendingTakeTargetProjectId } : {}),
+		};
 	});
 
 	// returns the webcam path (if any) for a given screen video by

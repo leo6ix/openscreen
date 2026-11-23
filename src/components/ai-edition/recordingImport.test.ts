@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CursorTelemetryPoint } from "@/components/video-editor/types";
-import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/timeline";
+import {
+	insertAssetClip,
+	replaceTimeline as replaceTimelineOp,
+} from "@/lib/ai-edition/document/timeline";
 import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { undo } from "@/lib/ai-edition/store/undo";
@@ -57,6 +60,8 @@ function stubElectronApi(
 	screenVideoPath: string | null,
 	cursorCaptureMode: "editable-overlay" | "system" = "editable-overlay",
 	warning?: string,
+	/** The project the take was started from, handed back beside the session. */
+	targetProjectId?: string,
 ) {
 	let session: {
 		screenVideoPath: string;
@@ -65,7 +70,14 @@ function stubElectronApi(
 	} | null = screenVideoPath ? { screenVideoPath, createdAt: 0, cursorCaptureMode } : null;
 	const api = {
 		getCurrentRecordingSession: vi.fn(async () =>
-			session ? { success: true, session, ...(warning ? { warning } : {}) } : { success: false },
+			session
+				? {
+						success: true,
+						session,
+						...(warning ? { warning } : {}),
+						...(targetProjectId ? { targetProjectId } : {}),
+					}
+				: { success: false },
 		),
 		setCurrentRecordingSession: vi.fn(async (next: typeof session) => {
 			session = next;
@@ -95,6 +107,9 @@ describe("importPendingRecording", () => {
 		vi.clearAllMocks();
 		consumeFreshRecordingAutoZoomPending();
 		useProjectStore.setState({
+			// The import only creates a project when none is open, so a project id left
+			// behind by an earlier test would silently skip the create it asserts on.
+			projectId: null,
 			document: null,
 			createProject,
 			addAsset,
@@ -176,6 +191,205 @@ describe("importPendingRecording", () => {
 			"Auto-imported recording",
 			{ history: false },
 		);
+	});
+});
+
+// A take started from the editor's Rec tab belongs to the project that was open, not
+// to a new one. The editor window is destroyed for the take, so the project id travels
+// through the main process and comes back BESIDE the session — never inside it, since
+// `.session.json` manifests are read back as live sessions much later.
+describe("recording a take into the open project", () => {
+	const OPEN_PROJECT_ID = "project_open";
+	const NEW_PROJECT_ID = "project_new";
+	const SCREEN_PATH = "/recordings/take-2.mp4";
+
+	function videoAsset(id: string, path: string): AxcutDocument["assets"][number] {
+		return {
+			id,
+			kind: "video",
+			label: id,
+			originalPath: path,
+			cameraTrack: null,
+		};
+	}
+
+	function projectDocument(
+		projectId: string,
+		title: string,
+		assets: AxcutDocument["assets"] = [],
+	): AxcutDocument {
+		const document = createEmptyDocument({ projectId, title });
+		return {
+			...document,
+			assets,
+			project: {
+				...document.project,
+				primaryAssetId: assets[0]?.id ?? document.project.primaryAssetId,
+			},
+		};
+	}
+
+	/** The first take, already on the open project's timeline. */
+	function openProjectDocument(): AxcutDocument {
+		const asset = videoAsset("asset_1", "/recordings/take-1.mp4");
+		return insertAssetClip(projectDocument(OPEN_PROJECT_ID, "Open project", [asset]), 0, {
+			id: "clip_1",
+			assetId: asset.id,
+			sourceStartSec: 0,
+			sourceEndSec: 30,
+			origin: "user",
+			reason: "Take 1",
+		});
+	}
+
+	const loadProject = vi.fn(async (projectId: string) => {
+		useProjectStore.setState({
+			projectId,
+			document: openProjectDocument(),
+			status: "ready",
+			error: null,
+		});
+	});
+	const createProject = vi.fn(async (title: string) => {
+		const document = projectDocument(NEW_PROJECT_ID, title);
+		useProjectStore.setState({
+			projectId: NEW_PROJECT_ID,
+			document,
+			status: "ready",
+			error: null,
+		});
+		return document;
+	});
+	// Mirrors the real `addAsset`: the asset lands on the document, with no
+	// `durationSec` (the import never measures the file).
+	const addAsset = vi.fn(async (_path: string, label?: string) => {
+		const asset = videoAsset("asset_2", SCREEN_PATH);
+		const current = useProjectStore.getState().document;
+		if (!current) return null;
+		useProjectStore.setState({
+			document: {
+				...current,
+				assets: [...current.assets, { ...asset, label: label ?? asset.label }],
+			},
+		});
+		return asset;
+	});
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		consumeFreshRecordingAutoZoomPending();
+		useProjectStore.getState().clear();
+		useProjectStore.setState({
+			projectId: null,
+			document: null,
+			currentTimeSec: 0,
+			loadProject,
+			createProject,
+			addAsset,
+			replaceTimeline,
+		});
+	});
+
+	it("appends the take after the last clip, and puts the playhead on it", async () => {
+		// What `useTimeline.appendTakeClip` does: insert at the end, then the probe.
+		const appendTakeClip = vi.fn(async (assetId: string, reason: string) => {
+			const current = useProjectStore.getState().document;
+			if (!current) return null;
+			const next = insertAssetClip(current, current.timeline.clips.length, {
+				id: "clip_2",
+				assetId,
+				sourceStartSec: 0,
+				sourceEndSec: 12,
+				origin: "user",
+				reason,
+			});
+			useProjectStore.setState({ document: next });
+			return "clip_2";
+		});
+		const onImported = vi.fn();
+		stubElectronApi(SCREEN_PATH, "system", undefined, OPEN_PROJECT_ID);
+
+		await expect(importPendingRecording(undefined, { appendTakeClip, onImported })).resolves.toBe(
+			true,
+		);
+
+		expect(loadProject).toHaveBeenCalledWith(OPEN_PROJECT_ID);
+		expect(createProject).not.toHaveBeenCalled();
+		expect(addAsset).toHaveBeenCalledWith(SCREEN_PATH, expect.stringMatching(/^Take 2 — /));
+		expect(appendTakeClip).toHaveBeenCalledWith("asset_2", "Take 2");
+		expect(useProjectStore.getState().currentTimeSec).toBe(30);
+		expect(onImported).toHaveBeenCalledWith({
+			projectTitle: "Open project",
+			takeNumber: 2,
+			appended: true,
+		});
+	});
+
+	it("keeps the open project's primary asset, so the earlier take still owns the stage", async () => {
+		stubElectronApi(SCREEN_PATH, "system", undefined, OPEN_PROJECT_ID);
+
+		await importPendingRecording(undefined, { appendTakeClip: vi.fn(async () => "clip_2") });
+
+		expect(useProjectStore.getState().document?.project.primaryAssetId).toBe("asset_1");
+	});
+
+	// The project can be deleted while the take is being recorded. `loadProject` reports
+	// that by setting `status` and RETURNING, so the fallback has to ask the store, not
+	// a `try/catch`. Losing the take would be worse than the annotation: keep it, in a
+	// project of its own.
+	it("builds a new project when the target is gone, and says so", async () => {
+		loadProject.mockImplementationOnce(async () => {
+			useProjectStore.setState({
+				projectId: null,
+				document: null,
+				status: "error",
+				error: "Project not found",
+			});
+		});
+		const appendTakeClip = vi.fn(async () => "clip_2");
+		const onWarning = vi.fn();
+		const onTargetUnavailable = vi.fn();
+		const onImported = vi.fn();
+		stubElectronApi(SCREEN_PATH, "system", undefined, OPEN_PROJECT_ID);
+
+		await expect(
+			importPendingRecording(onWarning, {
+				appendTakeClip,
+				onTargetUnavailable,
+				onImported,
+			}),
+		).resolves.toBe(true);
+
+		expect(onTargetUnavailable).toHaveBeenCalledTimes(1);
+		expect(onWarning).not.toHaveBeenCalled();
+		expect(createProject).toHaveBeenCalledTimes(1);
+		expect(appendTakeClip).not.toHaveBeenCalled();
+		expect(addAsset).toHaveBeenCalledWith(SCREEN_PATH, "take-2.mp4");
+		expect(onImported).toHaveBeenCalledWith({
+			projectTitle: expect.any(String),
+			takeNumber: 1,
+			appended: false,
+		});
+	});
+
+	it("creates a project when no target was armed", async () => {
+		const appendTakeClip = vi.fn(async () => "clip_2");
+		stubElectronApi(SCREEN_PATH, "system");
+
+		await importPendingRecording(undefined, { appendTakeClip });
+
+		expect(loadProject).not.toHaveBeenCalled();
+		expect(createProject).toHaveBeenCalledTimes(1);
+		expect(appendTakeClip).not.toHaveBeenCalled();
+	});
+
+	// Opening a project is not a take: whatever the editor armed before it is spent.
+	it("consumes the target once the take is on the project", async () => {
+		const api = stubElectronApi(SCREEN_PATH, "system", undefined, OPEN_PROJECT_ID);
+
+		await importPendingRecording(undefined, { appendTakeClip: vi.fn(async () => "clip_2") });
+
+		expect(api.setCurrentRecordingSession).toHaveBeenCalledWith(null);
 	});
 });
 
@@ -359,6 +573,7 @@ describe("fresh-recording auto-zoom", () => {
 		// their own. Without this a stubbed "off" leaks into whatever runs next.
 		stubRecordingPrefs({ autoZoomEnabled: true });
 		useProjectStore.setState({
+			projectId: null,
 			document: null,
 			createProject,
 			addAsset,

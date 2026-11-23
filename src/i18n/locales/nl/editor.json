@@ -53,7 +53,10 @@
 		"permissionDenied": "Opnamemachtiging geweigerd. Sta schermopname toe.",
 		"accessibilityAllowAndRetry": "Sta Toegankelijkheid toe voor OpenScreen en druk daarna opnieuw op opnemen om het aftellen te starten.",
 		"cursorAccessibilityUnavailable": "Toegankelijkheid staat uit. De opname gaat verder, maar cursoreffecten zijn mogelijk beperkt. Schakel het in via Systeeminstellingen voor volledige cursoreffecten.",
-		"selectSource": "Kies een scherm of venster om op te nemen"
+		"selectSource": "Kies een scherm of venster om op te nemen",
+		"takeAdded": "Opname {{number}} toegevoegd aan {{project}}",
+		"addedToNewProject": "Opname toegevoegd aan een nieuw project",
+		"targetProjectUnavailable": "Het project van deze opname kon niet worden geopend. De opname is in een nieuw project opgeslagen."
 	},
 	"emptyState": {
 		"title": "Begin met een opname",

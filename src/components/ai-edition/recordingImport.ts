@@ -46,7 +46,15 @@ import { nativeBridgeClient } from "@/native/client";
 // records the project id so a later undo or delete cannot silently re-seed it.
 let pendingFreshRecordingAutoZoom = false;
 let pendingFreshRecordingAutoZoomPath: string | null = null;
-let appliedFreshRecordingAutoZoomProjectId: string | null = null;
+/**
+ * The take that has already been decorated, held by ASSET path rather than project id.
+ *
+ * A project can hold several takes, and a take imports into a document that already
+ * carries the earlier takes' zooms — so "the project has zooms" says nothing about
+ * whether THIS take does. Kept after the hand-off is spent so a later undo or delete
+ * cannot silently re-seed the same take.
+ */
+let appliedFreshRecordingAutoZoomAssetPath: string | null = null;
 let freshRecordingAutoZoomSaveChain: Promise<void> = Promise.resolve();
 
 // Kept only for the HUD hand-off, never for ordinary media imports or reopened
@@ -86,7 +94,7 @@ async function reportReadyRecording(): Promise<void> {
 export function markFreshRecordingAutoZoomPending(assetPath: string): void {
 	pendingFreshRecordingAutoZoom = true;
 	pendingFreshRecordingAutoZoomPath = assetPath;
-	appliedFreshRecordingAutoZoomProjectId = null;
+	appliedFreshRecordingAutoZoomAssetPath = null;
 }
 
 function clearFreshRecordingAutoZoomPending(): void {
@@ -97,7 +105,7 @@ function clearFreshRecordingAutoZoomPending(): void {
 export function consumeFreshRecordingAutoZoomPending(): boolean {
 	const was = pendingFreshRecordingAutoZoom;
 	clearFreshRecordingAutoZoomPending();
-	appliedFreshRecordingAutoZoomProjectId = null;
+	appliedFreshRecordingAutoZoomAssetPath = null;
 	freshRecordingAutoZoomSaveChain = Promise.resolve();
 	return was;
 }
@@ -152,6 +160,24 @@ function pendingFreshRecordingAsset(document: AxcutDocument) {
 }
 
 /**
+ * Whether this take has already been decorated: some zoom is anchored to one of its
+ * clips.
+ *
+ * `clipId` is what makes the question answerable — `appendAutoZoomSuggestions` anchors
+ * every suggestion through `anchorRegionsWithDerivedMs`, so a generated zoom always
+ * names the clip it sits on. A legacy UNANCHORED region therefore does not read as
+ * "this take already has zooms", which is the behaviour we want: it was not created
+ * for any take in particular, and the wand remains the way to re-derive it.
+ */
+function hasZoomsForAsset(document: AxcutDocument, assetId: string): boolean {
+	const clipIds = new Set(
+		document.timeline.clips.filter((clip) => clip.assetId === assetId).map((clip) => clip.id),
+	);
+	if (clipIds.size === 0) return false;
+	return (document.zoomRanges ?? []).some((range) => range.clipId && clipIds.has(range.clipId));
+}
+
+/**
  * Whether the pending take's real length has landed yet.
  *
  * Not just `asset.durationSec != null`. A recording whose container reports no
@@ -180,19 +206,27 @@ function hasProbedDurationForPendingAsset(document: AxcutDocument): boolean {
 
 function canApplyFreshRecordingAutoZooms(document: AxcutDocument): boolean {
 	if (!pendingFreshRecordingAutoZoom) return false;
-	if (appliedFreshRecordingAutoZoomProjectId === document.project.id) return false;
-	if ((document.zoomRanges?.length ?? 0) > 0) return false;
+	if (
+		appliedFreshRecordingAutoZoomAssetPath !== null &&
+		appliedFreshRecordingAutoZoomAssetPath === pendingFreshRecordingAutoZoomPath
+	) {
+		return false;
+	}
+	const asset = pendingFreshRecordingAsset(document);
+	if (!asset) return false;
+	if (hasZoomsForAsset(document, asset.id)) return false;
 	if ((document.timeline?.clips?.length ?? 0) === 0) return false;
 	if (!hasProbedDurationForPendingAsset(document)) return false;
-	return document.assets.some(isPendingFreshRecordingAsset);
+	return true;
 }
 
-/** Zooms are on the document already -- the wand ran, or a redo brought them back.
- *  The take is decorated, so the hand-off is spent for this project. */
+/** Zooms are on this take already -- the wand ran for it, or a redo brought them back.
+ *  The take is decorated, so the hand-off is spent. */
 function markDecoratedIfZoomed(document: AxcutDocument): boolean {
-	if ((document.zoomRanges?.length ?? 0) === 0) return false;
+	const asset = pendingFreshRecordingAsset(document);
+	if (!asset || !hasZoomsForAsset(document, asset.id)) return false;
+	appliedFreshRecordingAutoZoomAssetPath = asset.originalPath;
 	clearFreshRecordingAutoZoomPending();
-	appliedFreshRecordingAutoZoomProjectId = document.project.id;
 	return true;
 }
 
@@ -205,7 +239,10 @@ export async function applyPendingFreshRecordingAutoZooms(
 	deps: ApplyFreshRecordingAutoZoomsDeps = {},
 ): Promise<AxcutDocument> {
 	if (!pendingFreshRecordingAutoZoom) return document;
-	if (appliedFreshRecordingAutoZoomProjectId === document.project.id) {
+	if (
+		appliedFreshRecordingAutoZoomAssetPath !== null &&
+		appliedFreshRecordingAutoZoomAssetPath === pendingFreshRecordingAutoZoomPath
+	) {
 		clearFreshRecordingAutoZoomPending();
 		return document;
 	}
@@ -288,8 +325,9 @@ export async function maybeSaveFreshRecordingAutoZooms(
 			if ((await waitForDocumentSaves(deps.waitTimeoutMs)) === "timeout") return false;
 			const current = liveDocument(document);
 			if (current.project.id !== latest.project.id) return false;
-			if ((current.zoomRanges?.length ?? 0) > 0) {
-				appliedFreshRecordingAutoZoomProjectId = current.project.id;
+			const decorated = pendingFreshRecordingAsset(current);
+			if (decorated && hasZoomsForAsset(current, decorated.id)) {
+				appliedFreshRecordingAutoZoomAssetPath = decorated.originalPath;
 				clearFreshRecordingAutoZoomPending();
 				return false;
 			}
@@ -317,8 +355,9 @@ export async function maybeSaveFreshRecordingAutoZooms(
 			// cannot tell what landed, so do not clear pending.
 			if ((await waitForDocumentSaves(deps.waitTimeoutMs)) === "timeout") return saved;
 			const stored = useProjectStore.getState().document;
-			if (saved && stored && (stored.zoomRanges?.length ?? 0) > 0) {
-				appliedFreshRecordingAutoZoomProjectId = stored.project.id;
+			const storedTake = stored ? pendingFreshRecordingAsset(stored) : undefined;
+			if (saved && stored && storedTake && hasZoomsForAsset(stored, storedTake.id)) {
+				appliedFreshRecordingAutoZoomAssetPath = storedTake.originalPath;
 				clearFreshRecordingAutoZoomPending();
 			}
 			return saved;
@@ -352,9 +391,55 @@ export async function maybeSaveFreshRecordingAutoZooms(
 	});
 }
 
+/** What the editor says once the take is on a project. */
+export type ImportedTake = {
+	projectTitle: string;
+	/** 1 for the first take in a project. */
+	takeNumber: number;
+	/** True when the clip was appended after an existing one. */
+	appended: boolean;
+};
+
+export type ImportPendingRecordingDeps = {
+	/** Called once the take is on the project, with what the editor should report. */
+	onImported?: (take: ImportedTake) => void;
+	/**
+	 * Appends the take's clip after the last one, and kicks off the background
+	 * duration probe — `useTimeline.appendTakeClip`, injected because this module has
+	 * no hook access.
+	 *
+	 * The probe is not optional detail: `addAsset` never sets `durationSec` and
+	 * `Preview` only loads the PRIMARY asset's metadata, so a later take's clip would
+	 * otherwise stay at the 60s placeholder and fresh-recording auto-zoom would keep
+	 * refusing to decorate it. So when this is absent there is no correct length to
+	 * place a clip at and none is placed: the take's asset is on the project, unplaced,
+	 * and the warning says so. One caller supplies it — the editor on mount.
+	 */
+	appendTakeClip?: (assetId: string, reason: string) => Promise<string | null>;
+	/**
+	 * The project this take was armed for could not be opened, so the take became a
+	 * project of its own.
+	 *
+	 * A callback rather than a string for the same reason `appendTakeClip` is one: this
+	 * module has no hook access, and the message is user-facing, so the caller says it in
+	 * the user's language instead of this file carrying English into 17 locales.
+	 */
+	onTargetUnavailable?: () => void;
+};
+
+/** How many takes a project already holds. Audio is an import, never a take. */
+function takeCount(document: AxcutDocument | null): number {
+	return (document?.assets ?? []).filter((asset) => asset.kind !== "audio").length;
+}
+
 /**
- * Imports the recording the HUD handed over into a new project, and consumes the
- * hand-off so it is imported exactly once.
+ * Imports the recording the HUD handed over, and consumes the hand-off so it is
+ * imported exactly once.
+ *
+ * With a target project (a take started from the editor's Rec tab) the recording is
+ * appended to that project: one new asset, one new clip after the last one, auto-zoom
+ * for this take only. Without one it builds a project around the take, as it always
+ * did.
  *
  * Returns false when there is nothing pending — the caller then falls back to
  * reopening the most recent project. Throws if the import itself fails, leaving
@@ -367,6 +452,7 @@ export async function importPendingRecording(
 	 * the editor is the only window left to say it.
 	 */
 	onWarning?: (message: string) => void,
+	deps: ImportPendingRecordingDeps = {},
 ): Promise<boolean> {
 	const api = window.electronAPI;
 	if (!api) return false;
@@ -374,6 +460,7 @@ export async function importPendingRecording(
 	const result = await api.getCurrentRecordingSession();
 	const screenPath = result.success ? result.session?.screenVideoPath : undefined;
 	if (!screenPath) return false;
+	const targetProjectId = result.success ? result.targetProjectId : undefined;
 	const pending: typeof pendingCompletion = result.session
 		? { session: result.session, projectId: null }
 		: null;
@@ -381,13 +468,42 @@ export async function importPendingRecording(
 	try {
 		const cursorCaptureMode = result.success ? result.session?.cursorCaptureMode : undefined;
 		const warning = result.success ? result.warning : undefined;
+		const store = () => useProjectStore.getState();
 
-		const label = screenPath.split(/[\\/]/).pop() || "Recording";
-		const created = await useProjectStore
-			.getState()
-			.createProject(`Recording ${new Date().toLocaleString()}`);
-		if (pending) pending.projectId = created.project.id;
-		await useProjectStore.getState().addAsset(screenPath, label);
+		// Did this take start from an open project? Only then is it a take rather than
+		// the recording the project gets built around. Asked of the store AFTER the load,
+		// not of the returned promise: `loadProject` reports failure by setting `status`
+		// and RETURNING, so a target that was deleted since the editor closed leaves
+		// `projectId` empty here and falls through to a new project below.
+		let joinsOpenProject = false;
+		if (targetProjectId) {
+			// Normally the window was destroyed for the take, so the project has to be read
+			// back from disk. If it is somehow still loaded, keep the live document: reloading
+			// it would throw away edits made after the take was started.
+			const alreadyOpen = store().projectId === targetProjectId && store().document != null;
+			if (!alreadyOpen) await store().loadProject(targetProjectId);
+			joinsOpenProject = store().projectId === targetProjectId && store().document != null;
+			if (!joinsOpenProject) {
+				deps.onTargetUnavailable?.();
+			}
+		}
+		if (!store().projectId) {
+			const created = await store().createProject(`Recording ${new Date().toLocaleString()}`);
+			if (pending) pending.projectId = created.project.id;
+		}
+		if (pending && !pending.projectId) pending.projectId = store().projectId;
+		// A project that already holds clips also appends: an editor that was never torn
+		// down (so no target was armed) must not have its timeline replaced.
+		const hadClips = (store().document?.timeline.clips.length ?? 0) > 0;
+		joinsOpenProject = joinsOpenProject || hadClips;
+
+		const takeNumber = takeCount(store().document) + 1;
+		// A take added to an existing project names itself; a first take keeps the file
+		// name, which is what the media panel showed before this feature existed.
+		const label = joinsOpenProject
+			? `Take ${takeNumber} — ${new Date().toLocaleTimeString()}`
+			: screenPath.split(/[\\/]/).pop() || "Recording";
+		const added = await store().addAsset(screenPath, label);
 		// Mark before the video element can fire `loadedmetadata`. The asset path is
 		// already on the document; waiting until the 60s seed finished let the first
 		// metadata pass consume nothing and the second never arrive.
@@ -401,31 +517,51 @@ export async function importPendingRecording(
 			markFreshRecordingAutoZoomPending(screenPath);
 		}
 		// Consumed: the recording now lives in a project. Cleared here rather than
-		// after the timeline seed below so a failure down there can't hand the same
-		// recording to the next editor window.
+		// after the timeline placement below so a failure down there can't hand the same
+		// recording to the next editor window. It also retires the target in main.
 		await api.setCurrentRecordingSession(null);
 
-		// ponytail: MediaRecorder WebMs ship with duration = NaN until
-		// fix-webm-duration patches the EBML header; until that flows through the
-		// asset, drop a default 60s clip into the timeline so the editor isn't stuck
-		// on "No clips yet" the moment the user lands in the project. Real duration
-		// overwrites this when handleLoadedMetadata fires with a finite value.
-		const doc = useProjectStore.getState().document;
-		if (doc && doc.timeline.clips.length === 0 && doc.assets.length > 0) {
-			// `history: false`. Nothing here is an edit: the user finished a recording and the
-			// editor built them a project around it, unattended, on mount. Recording it left a
-			// brand-new project sitting at `past.length === 1` before the user had touched
-			// anything, so their FIRST Ctrl+Z restored the state before the seed -- an empty
-			// timeline -- and the persist that follows an undo wrote that empty timeline to disk.
-			await useProjectStore
-				.getState()
-				.replaceTimeline([{ startSec: 0, endSec: 60 }], "Auto-imported recording", {
+		let appended = false;
+		if (added && joinsOpenProject) {
+			// A take joins the timeline at the end. With no `appendTakeClip` there is no
+			// correct length to place it at (see the deps doc above), so the take stays an
+			// asset in the media panel rather than becoming a clip nothing can correct.
+			if (!deps.appendTakeClip) {
+				console.warn("[recording] take added without a clip: no appendTakeClip supplied");
+			} else {
+				const clipId = await deps.appendTakeClip(added.id, `Take ${takeNumber}`);
+				const placed = clipId
+					? store().document?.timeline.clips.find((clip) => clip.id === clipId)
+					: undefined;
+				if (placed) store().setCurrentTime(placed.timelineStartSec);
+				appended = placed != null;
+			}
+		} else {
+			// ponytail: MediaRecorder WebMs ship with duration = NaN until
+			// fix-webm-duration patches the EBML header; until that flows through the
+			// asset, drop a default 60s clip into the timeline so the editor isn't stuck
+			// on "No clips yet" the moment the user lands in the project. Real duration
+			// overwrites this when handleLoadedMetadata fires with a finite value.
+			const doc = store().document;
+			if (doc && doc.timeline.clips.length === 0 && doc.assets.length > 0) {
+				// `history: false`. Nothing here is an edit: the user finished a recording and the
+				// editor built them a project around it, unattended, on mount. Recording it left a
+				// brand-new project sitting at `past.length === 1` before the user had touched
+				// anything, so their FIRST Ctrl+Z restored the state before the seed -- an empty
+				// timeline -- and the persist that follows an undo wrote that empty timeline to disk.
+				await store().replaceTimeline([{ startSec: 0, endSec: 60 }], "Auto-imported recording", {
 					history: false,
 				});
+			}
 		}
-		const latest = useProjectStore.getState().document;
+		const latest = store().document;
 		if (latest) {
 			await maybeSaveFreshRecordingAutoZooms(latest);
+			deps.onImported?.({
+				projectTitle: latest.project.title,
+				takeNumber,
+				appended,
+			});
 		}
 		if (warning) {
 			onWarning?.(warning);

@@ -45,7 +45,10 @@
 		"restartFailed": "Yeni kayıt başlatılamadı. Önceki kayıt silindi.",
 		"accessibilityAllowAndRetry": "OpenScreen için Erişilebilirlik erişimine izin verin, ardından geri sayımı başlatmak için tekrar kayda basın.",
 		"cursorAccessibilityUnavailable": "Erişilebilirlik erişimi kapalı. Kayıt devam edecek ancak imleç efektleri sınırlı olabilir. Tüm imleç efektlerini kullanmak için Sistem Ayarları'ndan erişimi açın.",
-		"selectSource": "Lütfen kayıt için bir kaynak seçin"
+		"selectSource": "Lütfen kayıt için bir kaynak seçin",
+		"takeAdded": "{{number}}. çekim {{project}} projesine eklendi",
+		"addedToNewProject": "Kayıt yeni bir projeye eklendi",
+		"targetProjectUnavailable": "Bu çekimin projesi açılamadı. Çekim yeni bir projeye kaydedildi."
 	},
 	"loadingVideo": "Video yükleniyor...",
 	"loadingEditor": "Editör yükleniyor...",

@@ -140,6 +140,12 @@ const DECLARED: WritePath[] = [
 		"save",
 		"gesture",
 	),
+	// The take the recorder handed over, appended after the last clip when the editor
+	// reopens. Not an edit anyone made -- the same argument as the first-take seed --
+	// so it saves with `history: false`: Ctrl+Z after landing in a project has to reach
+	// the user's own last change. Its duration is corrected by the background probe,
+	// which has its own row below.
+	w("src/lib/ai-edition/store/useTimeline.ts", "appendTakeClip", "save", "automatic"),
 	// Renaming the project from the title field.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleRenameProject", "save", "gesture"),
 	// Ctrl+S / File > Save.

@@ -53,7 +53,10 @@
 		"permissionDenied": "Recording permission denied. Please allow screen recording.",
 		"accessibilityAllowAndRetry": "Allow Accessibility access for OpenScreen, then press record again to start the countdown.",
 		"cursorAccessibilityUnavailable": "Accessibility is off. Recording will continue, but cursor effects may be limited. Enable it in System Settings for full cursor effects.",
-		"selectSource": "Choose a screen or window to record"
+		"selectSource": "Choose a screen or window to record",
+		"takeAdded": "Take {{number}} added to {{project}}",
+		"addedToNewProject": "Recording added to a new project",
+		"targetProjectUnavailable": "The project this take was recorded for could not be opened. The take was saved to a new project instead."
 	},
 	"emptyState": {
 		"title": "Start with a recording",

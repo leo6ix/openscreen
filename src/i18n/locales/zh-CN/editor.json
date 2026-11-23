@@ -53,7 +53,10 @@
 		"permissionDenied": "录屏权限被拒绝。请允许屏幕录制。",
 		"accessibilityAllowAndRetry": "允许 OpenScreen 使用辅助功能权限，然后再次按录制以开始倒计时。",
 		"cursorAccessibilityUnavailable": "辅助功能权限未开启。录制将继续，但光标效果可能受限。请在系统设置中开启此权限以使用完整的光标效果。",
-		"selectSource": "请选择要录制的源"
+		"selectSource": "请选择要录制的源",
+		"takeAdded": "第 {{number}} 个片段已添加到 {{project}}",
+		"addedToNewProject": "录制已添加到新项目",
+		"targetProjectUnavailable": "无法打开此次录制的项目。录制已改为保存到新项目。"
 	},
 	"emptyState": {
 		"title": "未打开任何项目",

@@ -1593,6 +1593,47 @@ export function useTimeline() {
 		[saveDocument, probeAndCorrectClip],
 	);
 
+	// Append a new take's clip after the last one — what the recording import calls
+	// when a take was started from an open project.
+	//
+	// Deliberately not `insertClipAt`: that one is a user drop, so it records undo
+	// history and reasons the clip "Inserted from media panel". A take arriving from
+	// the recorder is not an edit anyone made — same argument as the first-take seed —
+	// so this saves with `history: false` and names the take.
+	//
+	// The background probe matters more here than on a drop, and is the reason this
+	// cannot just be an `insertAssetClip` in the import: `Preview` mounts only the
+	// PRIMARY asset (so `loadedmetadata` never fires for a later take), and
+	// `addAsset` does not populate `durationSec`. Without the probe the appended clip
+	// stays at the 60s placeholder for good, and fresh-recording auto-zoom refuses to
+	// decorate a clip that is still waiting for its length.
+	const appendTakeClip = useCallback(
+		async (assetId: string, reason: string): Promise<string | null> => {
+			const currentDoc = useProjectStore.getState().document;
+			if (!currentDoc) return null;
+			const asset = currentDoc.assets.find((a) => a.id === assetId);
+			if (!asset) return null;
+			const newClip = {
+				id: createId("clip"),
+				assetId,
+				sourceStartSec: 0,
+				sourceEndSec: asset.durationSec ?? PLACEHOLDER_DURATION_SEC,
+				origin: "user" as const,
+				reason,
+			};
+			const finalDoc = insertAssetClip(currentDoc, currentDoc.timeline.clips.length, newClip);
+			if (!(await saveDocument(finalDoc, { history: false }))) return null;
+			setClipSelection(newClip.id);
+			if (asset.durationSec == null) {
+				void probeAndCorrectClip(assetId, newClip.id, asset.originalPath).catch((err) => {
+					console.warn("[timeline] background duration probe failed to save:", err);
+				});
+			}
+			return newClip.id;
+		},
+		[saveDocument, probeAndCorrectClip],
+	);
+
 	// Reorder a clip to a new index, then resequence timeline positions.
 	// Delegates to the shared document/timeline.ts implementation — the same
 	// function the agent tool-executor uses for "move_clip" ops — so both
@@ -1903,6 +1944,7 @@ export function useTimeline() {
 		clearSelection,
 		applyClipEdit,
 		insertClipAt,
+		appendTakeClip,
 		moveClip,
 		duplicateClip,
 		removeClip,

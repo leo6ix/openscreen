@@ -53,7 +53,10 @@
 		"permissionDenied": "Odmówiono uprawnienia do nagrywania. Zezwól na nagrywanie ekranu.",
 		"accessibilityAllowAndRetry": "Zezwól OpenScreen na dostęp do Dostępności, a następnie ponownie naciśnij nagrywanie, aby uruchomić odliczanie.",
 		"cursorAccessibilityUnavailable": "Dostępność jest wyłączona. Nagrywanie będzie kontynuowane, ale efekty kursora mogą być ograniczone. Włącz ją w Ustawieniach systemowych, aby korzystać z pełnych efektów kursora.",
-		"selectSource": "Wybierz ekran lub okno do nagrania"
+		"selectSource": "Wybierz ekran lub okno do nagrania",
+		"takeAdded": "Ujęcie {{number}} dodane do {{project}}",
+		"addedToNewProject": "Nagranie dodane do nowego projektu",
+		"targetProjectUnavailable": "Nie udało się otworzyć projektu tego ujęcia. Ujęcie zapisano w nowym projekcie."
 	},
 	"emptyState": {
 		"title": "Zacznij od nagrania",

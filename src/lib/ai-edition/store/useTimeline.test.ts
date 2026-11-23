@@ -243,6 +243,76 @@ describe("useTimeline.insertClipAt background duration probe", () => {
 	});
 });
 
+describe("useTimeline.appendTakeClip", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		probeVideoDurationMock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: {
+				...sampleDoc,
+				assets: [
+					...sampleDoc.assets,
+					{
+						id: "asset_2",
+						kind: "video",
+						label: "take-2.webm",
+						originalPath: "/tmp/take-2.webm",
+						durationSec: undefined,
+						video: { codec: "unknown", width: 1920, height: 1080, fps: 0 },
+						cameraTrack: null,
+					},
+				],
+			},
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	// The import is not an edit anyone made, so it must not appear on the undo stack:
+	// Ctrl+Z after landing in a project has to reach the user's own last change, not
+	// the take the recorder handed over.
+	it("appends the take after the last clip and records no undo step", async () => {
+		probeVideoDurationMock.mockResolvedValue(5);
+		const { result } = renderTimeline();
+		expect(past.length).toBe(0);
+
+		let clipId: string | null = null;
+		await act(async () => {
+			clipId = await result.current.appendTakeClip("asset_2", "Take 2");
+		});
+
+		const clips = useProjectStore.getState().document?.timeline.clips ?? [];
+		expect(clips).toHaveLength(2);
+		expect(clips.at(-1)).toMatchObject({
+			id: clipId,
+			assetId: "asset_2",
+			reason: "Take 2",
+			timelineStartSec: 10,
+		});
+		expect(past.length).toBe(0);
+
+		// And the background probe is what stops it sitting at the 60s placeholder:
+		// `Preview` never mounts a later take, so no `loadedmetadata` would arrive.
+		await waitFor(() => {
+			const corrected = useProjectStore
+				.getState()
+				.document?.timeline.clips.find((clip) => clip.id === clipId);
+			expect(corrected).toMatchObject({ sourceEndSec: 5, timelineEndSec: 15 });
+		});
+	});
+});
+
 describe("useTimeline.moveClip / duplicateClip (delegates to document/timeline.ts)", () => {
 	const twoClipDoc: AxcutDocument = {
 		...sampleDoc,

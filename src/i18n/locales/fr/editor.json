@@ -51,7 +51,10 @@
 		"permissionDenied": "Permission d'enregistrement refusée. Veuillez autoriser l'enregistrement d'écran.",
 		"accessibilityAllowAndRetry": "Autorisez l'accès Accessibilité pour OpenScreen, puis appuyez de nouveau sur enregistrer pour lancer le compte à rebours.",
 		"cursorAccessibilityUnavailable": "L'accès à Accessibilité est désactivé. L'enregistrement continue, mais les effets du curseur peuvent être limités. Activez-le dans Réglages Système pour profiter de tous les effets du curseur.",
-		"selectSource": "Veuillez sélectionner une source à enregistrer"
+		"selectSource": "Veuillez sélectionner une source à enregistrer",
+		"takeAdded": "Prise {{number}} ajoutée à {{project}}",
+		"addedToNewProject": "Enregistrement ajouté à un nouveau projet",
+		"targetProjectUnavailable": "Le projet de cette prise n'a pas pu être ouvert. La prise a été enregistrée dans un nouveau projet."
 	},
 	"loadingVideo": "Chargement de la vidéo...",
 	"loadingEditor": "Chargement de l'éditeur...",
