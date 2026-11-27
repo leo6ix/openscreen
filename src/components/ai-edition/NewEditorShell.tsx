@@ -435,6 +435,9 @@ export function NewEditorShell() {
 		void (async () => {
 			if (!window.electronAPI) return;
 			try {
+				// The fallback below is its own toast: a take whose project is gone is not
+				// also "added to a new project" from the user's point of view.
+				let targetUnavailable = false;
 				if (
 					await importPendingRecording((warning) => toast.warning(warning), {
 						// The append itself lives in `useTimeline` because it needs the clip
@@ -443,7 +446,10 @@ export function NewEditorShell() {
 						appendTakeClip: tl.appendTakeClip,
 						// Same reason: the import knows the take lost its project, not what to
 						// call that in the user's language.
-						onTargetUnavailable: () => toast.warning(te("recording.targetProjectUnavailable")),
+						onTargetUnavailable: () => {
+							targetUnavailable = true;
+							toast.warning(te("recording.targetProjectUnavailable"));
+						},
 						onImported: (take) => {
 							if (take.appended) {
 								toast.success(
@@ -452,7 +458,7 @@ export function NewEditorShell() {
 										project: take.projectTitle,
 									}),
 								);
-							} else if (take.takeNumber === 1) {
+							} else if (take.takeNumber === 1 && !targetUnavailable) {
 								toast.success(te("recording.addedToNewProject"));
 							}
 							// A later take with no clip placed: `saveDocument` already reported the
