@@ -408,10 +408,15 @@ export type ImportPendingRecordingDeps = {
 	 * duration probe — `useTimeline.appendTakeClip`, injected because this module has
 	 * no hook access.
 	 *
-	 * The probe is not optional detail: `addAsset` never sets `durationSec` and
-	 * `Preview` only loads the PRIMARY asset's metadata, so a later take's clip would
-	 * otherwise stay at the 60s placeholder and fresh-recording auto-zoom would keep
-	 * refusing to decorate it. So when this is absent there is no correct length to
+	 * The probe is not optional detail: `addAsset` never sets `durationSec`, and this
+	 * import only moves the store's `currentTime`, it does not seek — so nothing here
+	 * makes the preview mount the new take promptly. `Preview`'s `previewSources` does
+	 * list every clip-referenced source, and `VirtualPreview` mounts one at a time
+	 * following the playhead, so the take's `<video>` will eventually fire
+	 * `loadedmetadata` with a real length; "eventually" is the problem. Until then the
+	 * clip sits at the 60s placeholder and fresh-recording auto-zoom, which waits for
+	 * this take's measured length, refuses to decorate it. The probe measures the file
+	 * at once and persists that. So when this is absent there is no correct length to
 	 * place a clip at and none is placed: the take's asset is on the project, unplaced,
 	 * and the warning says so. One caller supplies it — the editor on mount.
 	 */
@@ -427,7 +432,14 @@ export type ImportPendingRecordingDeps = {
 	onTargetUnavailable?: () => void;
 };
 
-/** How many takes a project already holds. Audio is an import, never a take. */
+/**
+ * How many takes a project already holds. Audio is an import, never a take.
+ *
+ * Counts every other asset, so a project that also holds imported B-roll greets the
+ * next recording as the one after the footage. Nothing renderer-side marks an asset
+ * as "recorded", and the number only feeds a label ("Take 3"), so it stays approximate
+ * on purpose rather than inventing a marker to make it exact.
+ */
 function takeCount(document: AxcutDocument | null): number {
 	return (document?.assets ?? []).filter((asset) => asset.kind !== "audio").length;
 }
@@ -477,9 +489,10 @@ export async function importPendingRecording(
 		// `projectId` empty here and falls through to a new project below.
 		let joinsOpenProject = false;
 		if (targetProjectId) {
-			// Normally the window was destroyed for the take, so the project has to be read
-			// back from disk. If it is somehow still loaded, keep the live document: reloading
-			// it would throw away edits made after the take was started.
+			// Normally the window was destroyed for the take (`switchToHudWrapper`), so the
+			// project has to be read back from disk. `alreadyOpen` is defence for a host
+			// that keeps the editor alive across the take: reloading then would throw away
+			// whatever was edited while the take ran.
 			const alreadyOpen = store().projectId === targetProjectId && store().document != null;
 			if (!alreadyOpen) await store().loadProject(targetProjectId);
 			joinsOpenProject = store().projectId === targetProjectId && store().document != null;
@@ -488,20 +501,29 @@ export async function importPendingRecording(
 			}
 		}
 		if (!store().projectId) {
-			const created = await store().createProject(`Recording ${new Date().toLocaleString()}`);
-			if (pending) pending.projectId = created.project.id;
+			await store().createProject(`Recording ${new Date().toLocaleString()}`);
 		}
+		// The store is the authority here: `reportReadyRecording` compares the document's
+		// id against this, and a project created just above and one loaded for the target
+		// both land in it.
 		if (pending && !pending.projectId) pending.projectId = store().projectId;
-		// A project that already holds clips also appends: an editor that was never torn
-		// down (so no target was armed) must not have its timeline replaced.
+		// Defence, not a live path: production always mounts this import on an empty
+		// store, because the editor window is torn down for the take. Should a host ever
+		// keep it alive, a project that already holds clips still appends rather than
+		// having its timeline replaced.
 		const hadClips = (store().document?.timeline.clips.length ?? 0) > 0;
 		joinsOpenProject = joinsOpenProject || hadClips;
 
 		const takeNumber = takeCount(store().document) + 1;
 		// A take added to an existing project names itself; a first take keeps the file
-		// name, which is what the media panel showed before this feature existed.
+		// name, which is what the media panel showed before this feature existed. Both the
+		// label and the clip reason stay untranslated: they are document content, not UI
+		// chrome, and "Auto-imported recording" is the existing precedent for that.
 		const label = joinsOpenProject
-			? `Take ${takeNumber} — ${new Date().toLocaleTimeString()}`
+			? `Take ${takeNumber} — ${new Date().toLocaleTimeString(undefined, {
+					hour: "2-digit",
+					minute: "2-digit",
+				})}`
 			: screenPath.split(/[\\/]/).pop() || "Recording";
 		const added = await store().addAsset(screenPath, label);
 		// Mark before the video element can fire `loadedmetadata`. The asset path is

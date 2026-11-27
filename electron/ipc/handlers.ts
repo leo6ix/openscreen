@@ -730,12 +730,26 @@ let currentRecordingSession: RecordingSession | null = null;
  * The project an editor-started take belongs to, handed back to the editor beside
  * the session so the take is appended instead of opening a project of its own.
  *
- * Only the `start-new-recording` IPC — the editor's Rec tab — arms it. The MCP take
- * runner and the tray reach the same function without a target, which clears it, and
- * the HUD's own record button never goes through it at all. It is deliberately NOT
- * stored on the session or in the `.session.json` manifest: those manifests are read
- * back as live sessions by `loadRecordedSessionForVideoPath`, so a persisted target
- * would resurface later and point an unrelated project's video at a stale project.
+ * ONLY the `start-new-recording` IPC — the editor's Rec tab — arms it. The MCP take
+ * runner reaches the same function without a target, which clears it; the HUD's own
+ * record button never goes through it at all; and the tray only ever stops a take, so
+ * it never arms one either. It is deliberately NOT stored on the session or in the
+ * `.session.json` manifest: those manifests are read back as live sessions by
+ * `loadRecordedSessionForVideoPath`, so a persisted target would resurface later and
+ * point an unrelated project's video at a stale project.
+ *
+ * The target is retired by, and only by, these four routes:
+ *
+ *   1. the session slot being set back to `null` (`setCurrentRecordingSessionState`),
+ *      which is what the editor's import does once the take is on the project;
+ *   2. a `recording-outcome` that is not `ready` — UNLESS it carries `keepTarget`,
+ *      which only Restart sends, because the take it discards is followed by another
+ *      for the same project;
+ *   3. `clear-take-target`, sent by the HUD when it abandons a take before any
+ *      recording exists and therefore has no outcome to report (countdown cancelled,
+ *      source picker dismissed, start refused or failed);
+ *   4. a project-file load or `set-current-video-path`, both of which publish a
+ *      session beside which an armed target has no meaning.
  */
 let pendingTakeTargetProjectId: string | null = null;
 
@@ -5276,6 +5290,13 @@ export function registerIpcHandlers(
 			recordingId: z.number().finite(),
 			status: z.enum(["failed", "cancelled"]),
 			message: z.string(),
+			/**
+			 * Keep the armed project target across this outcome: the take is being
+			 * RESTARTED, so the take that follows it belongs to the same project. Sent by
+			 * `restartRecording` and by nothing else — every other discarded take is spent
+			 * with the project it was armed for.
+			 */
+			keepTarget: z.boolean().optional(),
 		}),
 	]);
 	ipcMain.handle("recording-outcome", async (event, input: unknown) => {
@@ -5285,8 +5306,10 @@ export function registerIpcHandlers(
 		if (!parsed.success) return { success: false };
 		const outcome = parsed.data;
 		if (outcome.status !== "ready") {
-			// The take went nowhere, so the project it was meant for is spent with it.
-			pendingTakeTargetProjectId = null;
+			// The take went nowhere, so the project it was meant for is spent with it —
+			// unless the take is being restarted and another one follows in the same
+			// session (see the lifetime comment on `pendingTakeTargetProjectId`).
+			if (!outcome.keepTarget) pendingTakeTargetProjectId = null;
 			recordingCompletion.failed(outcome.recordingId, outcome.message);
 			mcpAppRecorder.recordingFinished(outcome.recordingId);
 			return { success: true };
@@ -5315,6 +5338,22 @@ export function registerIpcHandlers(
 			// open project.
 			...(pendingTakeTargetProjectId ? { targetProjectId: pendingTakeTargetProjectId } : {}),
 		};
+	});
+
+	/**
+	 * Retires the armed project target for a take that will never exist.
+	 *
+	 * The HUD sends this when it abandons an armed take before any recording starts —
+	 * countdown cancelled, source picker dismissed, start refused or failed. Those paths
+	 * report no `recording-outcome` (there is no recording to report), so without this
+	 * the target stays armed and the next take started from the HUD's own button, which
+	 * never goes through `start-new-recording`, would append itself to a project it was
+	 * not recorded for.
+	 */
+	ipcMain.handle("clear-take-target", (event) => {
+		if (event.sender !== getMainWindow()?.webContents) return { success: false };
+		pendingTakeTargetProjectId = null;
+		return { success: true };
 	});
 
 	// returns the webcam path (if any) for a given screen video by
@@ -5373,6 +5412,11 @@ export function registerIpcHandlers(
 			});
 		}
 		currentProjectPath = null;
+		// A session published from a bare video path is an opened file, or a stop that
+		// could not hand over its own session. Neither can be matched to the take an
+		// armed target was meant for, so the target is spent rather than attached to a
+		// project this recording may not belong to.
+		pendingTakeTargetProjectId = null;
 		return { success: true, path: currentVideoPath ?? normalizedPath };
 	}
 

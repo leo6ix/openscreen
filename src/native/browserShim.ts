@@ -152,6 +152,7 @@ function createShimElectronAPI() {
 		pickExportSavePath: () => Promise.resolve({ success: false, canceled: true }),
 		writeExportToPath: () => Promise.resolve({ success: false }),
 		getCurrentRecordingSession: () => Promise.resolve({ success: false, session: null }),
+		clearTakeTarget: () => Promise.resolve({ success: true }),
 		switchToHud: () => Promise.resolve({ success: true }),
 		switchToEditor: () => Promise.resolve({ success: true }),
 		startNewRecording: (_targetProjectId?: string) => Promise.resolve({ success: true }),

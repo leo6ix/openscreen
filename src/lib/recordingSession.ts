@@ -103,4 +103,15 @@ export function normalizeRecordingSession(candidate: unknown): RecordingSession 
 /** Internal recorder/editor hand-off, never an MCP server notification. */
 export type RecordingOutcome =
 	| { recordingId: number; status: "ready"; projectId: string }
-	| { recordingId: number; status: "failed" | "cancelled"; message: string };
+	| {
+			recordingId: number;
+			status: "failed" | "cancelled";
+			message: string;
+			/**
+			 * Keep the project an editor-started take was armed for across this discard.
+			 * Only Restart sends it: the take it threw away is followed by another one in
+			 * the same session, so the next take still belongs to the same project. Every
+			 * other discarded take is spent with its target.
+			 */
+			keepTarget?: boolean;
+	  };

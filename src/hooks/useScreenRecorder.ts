@@ -237,7 +237,19 @@ export async function finalizeWebcamAsset(
 	}
 }
 
-async function reportUnfinishedRecording(recordingId: number, cancelled: boolean) {
+/**
+ * Tells the main process a take ended without becoming a project.
+ *
+ * `keepTarget` carries the one exception: a Restart, whose discard is followed by
+ * another take for the same project. Every other discarded take retires the project
+ * it was armed for, because nothing connects that project to whatever is recorded
+ * next.
+ */
+async function reportUnfinishedRecording(
+	recordingId: number,
+	cancelled: boolean,
+	keepTarget = false,
+) {
 	try {
 		await window.electronAPI?.reportRecordingOutcome?.({
 			recordingId,
@@ -245,6 +257,7 @@ async function reportUnfinishedRecording(recordingId: number, cancelled: boolean
 			message: cancelled
 				? "The recording was cancelled or discarded."
 				: "The recording could not be saved and opened. The recording bar says why.",
+			...(keepTarget ? { keepTarget: true } : {}),
 		});
 	} catch (error) {
 		console.warn("Failed to report recording outcome:", error);
@@ -438,6 +451,15 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const allowAutoFinalize = useRef(false);
 	const discardRecordingId = useRef<number | null>(null);
 	const restarting = useRef(false);
+	/**
+	 * The take whose discard must NOT retire the project the editor armed for it: a
+	 * Restart throws the previous take away and records the next one in the same
+	 * session, so the target has to outlive the discard. Matched by recording id
+	 * because the discard is reported asynchronously — after `restartRecording` has
+	 * already moved on — and a boolean would be stale by then. Recording ids are
+	 * `Date.now()`, so an id left here can never match a later take.
+	 */
+	const keepTakeTargetForRecordingId = useRef<number | null>(null);
 	const countdownRunId = useRef(0);
 	/**
 	 * Held from the press until the countdown shows. Neither `countdownActive` nor
@@ -772,6 +794,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						await reportUnfinishedRecording(
 							activeRecordingId,
 							discardRecordingId.current === activeRecordingId,
+							keepTakeTargetForRecordingId.current === activeRecordingId,
 						);
 					// Discard any recorder whose data wasn't part of a successful save (discarded
 					// run, failed save, or a webcam whose disk write failed while the screen still
@@ -865,7 +888,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			clearNativeRecordingState();
 			return true;
 		} finally {
-			if (!handedOver) await reportUnfinishedRecording(activeNativeRecording.recordingId, discard);
+			if (!handedOver)
+				await reportUnfinishedRecording(
+					activeNativeRecording.recordingId,
+					discard,
+					keepTakeTargetForRecordingId.current === activeNativeRecording.recordingId,
+				);
 			if (discardRecordingId.current === activeNativeRecording.recordingId) {
 				discardRecordingId.current = null;
 			}
@@ -979,7 +1007,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return true;
 			} finally {
 				if (!handedOver)
-					await reportUnfinishedRecording(activeNativeRecording.recordingId, discard);
+					await reportUnfinishedRecording(
+						activeNativeRecording.recordingId,
+						discard,
+						keepTakeTargetForRecordingId.current === activeNativeRecording.recordingId,
+					);
 				// A webcam stream that wasn't folded into a saved session has to be closed
 				// and its partial file removed, or a discarded or failed take orphans a
 				// half-written .webm now that the bytes go to disk as they arrive.
@@ -1105,7 +1137,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return true;
 			} finally {
 				if (!handedOver)
-					await reportUnfinishedRecording(activeNativeRecording.recordingId, discard);
+					await reportUnfinishedRecording(
+						activeNativeRecording.recordingId,
+						discard,
+						keepTakeTargetForRecordingId.current === activeNativeRecording.recordingId,
+					);
 				// A webcam stream that wasn't folded into a saved session has to be closed
 				// and its partial file removed, or a discarded or failed take orphans a
 				// half-written .webm now that the bytes go to disk as they arrive.
@@ -1252,11 +1288,30 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		}
 	};
 
+	/**
+	 * Retires the project target the editor armed, for a take that will never exist.
+	 *
+	 * Main clears it when a take ends in a non-`ready` outcome, but the paths that
+	 * abandon a take before any recording exists report nothing at all — a cancelled
+	 * countdown, a dismissed source picker, a refused or failed start. Without this the
+	 * target stays armed and the next take started from the HUD's own record button,
+	 * which never goes through `start-new-recording`, would append itself to a project
+	 * it was not recorded for.
+	 */
+	const abandonTakeTarget = async () => {
+		try {
+			await window.electronAPI?.clearTakeTarget?.();
+		} catch (error) {
+			console.warn("Failed to clear the take's project target:", error);
+		}
+	};
+
 	const cancelCountdown = () => {
 		const activeRunId = countdownRunId.current;
 		countdownRunId.current += 1;
 		setCountdownActive(false);
 		void safeHideCountdownOverlay(activeRunId);
+		void abandonTakeTarget();
 	};
 
 	const safeSetCountdownOverlayValue = async (value: number, runId: number) => {
@@ -1814,6 +1869,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			if (countdownRunId.current === runId) {
 				setCountdownActive(false);
 			}
+			// No take will follow, so the project it was armed for is spent.
+			void abandonTakeTarget();
 			alert(t("recording.selectSource"));
 			return;
 		}
@@ -1852,6 +1909,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const storage = await window.electronAPI.checkRecordingStorage?.();
 			if (storage && !storage.success) {
 				if (isCountdownRunActive(runId)) toast.error(storage.error);
+				// Refused before any recording: nothing is left to append to.
+				void abandonTakeTarget();
 				return;
 			}
 		} catch (error) {
@@ -1882,6 +1941,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				} else if (prepared.reason === "portal-cancelled") {
 					// The user said no to sharing. Falling through counted down, then
 					// asked again from the start below (rc.3 Linux pass).
+					void abandonTakeTarget();
 					return;
 				} else if (prepared.reason) {
 					console.info(`Native Linux capture was not prepared: ${prepared.reason}`);
@@ -2008,6 +2068,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 			const selectedSource = await window.electronAPI.getSelectedSource();
 			if (!selectedSource) {
+				void abandonTakeTarget();
 				alert(t("recording.selectSource"));
 				return { kind: "failed", message: "No screen or window was selected" };
 			}
@@ -2314,6 +2375,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const startCancelled = error instanceof RecordingStartCancelled;
 			window.electronAPI?.setRecordingState?.(false);
 			const errorMsg = error instanceof Error ? error.message : "Failed to start recording";
+			// The take did not begin — a dismissed picker or a failed capture — so the
+			// project it was armed for is spent.
+			void abandonTakeTarget();
 			if (!startCancelled) {
 				console.error("Failed to start recording:", error);
 				if (errorMsg.includes("Permission denied") || errorMsg.includes("NotAllowedError")) {
@@ -2533,6 +2597,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			!nativeLinuxRecording.current &&
 			!screenRecorder.current
 		) {
+			// No take follows the one Restart discarded, so the project both were meant
+			// for is spent after all.
+			void abandonTakeTarget();
 			toast.error(t("recording.restartFailed"));
 		}
 	};
@@ -2540,10 +2607,20 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const restartRecording = async () => {
 		if (restarting.current) return;
 
+		/**
+		 * Throws the current take away, and says the throwaway is a Restart's: the
+		 * outcome clears every other armed project target, so without this the take
+		 * that follows a Restart would open a project of its own.
+		 */
+		const discardForRestart = (id: number) => {
+			discardRecordingId.current = id;
+			keepTakeTargetForRecordingId.current = id;
+		};
+
 		if (nativeWindowsRecording.current) {
 			const activeRecordingId = recordingId.current;
 			restarting.current = true;
-			discardRecordingId.current = activeRecordingId;
+			discardForRestart(activeRecordingId);
 			try {
 				await finalizeNativeWindowsRecording(true);
 				await startRecordingAfterRestart();
@@ -2555,7 +2632,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		if (nativeMacRecording.current) {
 			const activeRecordingId = recordingId.current;
 			restarting.current = true;
-			discardRecordingId.current = activeRecordingId;
+			discardForRestart(activeRecordingId);
 			try {
 				await finalizeNativeMacRecording(true);
 				await startRecordingAfterRestart();
@@ -2567,7 +2644,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		if (nativeLinuxRecording.current) {
 			const activeRecordingId = recordingId.current;
 			restarting.current = true;
-			discardRecordingId.current = activeRecordingId;
+			discardForRestart(activeRecordingId);
 			try {
 				await finalizeNativeLinuxRecording(true);
 				await startRecordingAfterRestart();
@@ -2584,7 +2661,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		const activeRecordingId = recordingId.current;
 
 		restarting.current = true;
-		discardRecordingId.current = activeRecordingId;
+		discardForRestart(activeRecordingId);
 
 		const stopPromises = [
 			new Promise<void>((resolve) => {

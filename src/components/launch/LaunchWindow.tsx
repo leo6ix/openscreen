@@ -833,6 +833,10 @@ export function LaunchWindow() {
 			void startWhenDevicesReady();
 		});
 		const cleanupSelectorClosed = window.electronAPI?.onSourceSelectorClosed?.(() => {
+			// A picker closed while the HUD was still waiting for a selection to record
+			// after: it was dismissed, so no take follows and the project main armed for
+			// it is spent. A selection clears the flag first, and then this is a no-op.
+			if (recordAfterSourceSelectionRef.current) void window.electronAPI?.clearTakeTarget?.();
 			recordAfterSourceSelectionRef.current = false;
 		});
 

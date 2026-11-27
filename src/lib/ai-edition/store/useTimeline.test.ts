@@ -302,8 +302,9 @@ describe("useTimeline.appendTakeClip", () => {
 		});
 		expect(past.length).toBe(0);
 
-		// And the background probe is what stops it sitting at the 60s placeholder:
-		// `Preview` never mounts a later take, so no `loadedmetadata` would arrive.
+		// And the background probe is what stops it sitting at the 60s placeholder: the
+		// import only moves the store's `currentTime`, so nothing guarantees the preview
+		// swaps onto this take before automatic zoom wants its measured length.
 		await waitFor(() => {
 			const corrected = useProjectStore
 				.getState()

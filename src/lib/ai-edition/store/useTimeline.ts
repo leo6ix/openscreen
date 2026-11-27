@@ -1602,11 +1602,14 @@ export function useTimeline() {
 	// so this saves with `history: false` and names the take.
 	//
 	// The background probe matters more here than on a drop, and is the reason this
-	// cannot just be an `insertAssetClip` in the import: `Preview` mounts only the
-	// PRIMARY asset (so `loadedmetadata` never fires for a later take), and
-	// `addAsset` does not populate `durationSec`. Without the probe the appended clip
-	// stays at the 60s placeholder for good, and fresh-recording auto-zoom refuses to
-	// decorate a clip that is still waiting for its length.
+	// cannot just be an `insertAssetClip` in the import. `addAsset` does not populate
+	// `durationSec`, and the import only moves the store's `currentTime` — not a seek —
+	// so nothing guarantees the preview swaps onto the new take promptly. It does list
+	// every clip-referenced source and mount them one at a time as the playhead moves
+	// (`Preview.previewSources`, `VirtualPreview`), so `loadedmetadata` for this take
+	// does arrive once the preview reaches it; the clip meanwhile sits at the 60s
+	// placeholder, and fresh-recording auto-zoom refuses to decorate a clip that is
+	// still waiting for its length. The probe measures the file now and writes that in.
 	const appendTakeClip = useCallback(
 		async (assetId: string, reason: string): Promise<string | null> => {
 			const currentDoc = useProjectStore.getState().document;

@@ -35,20 +35,28 @@ and never reaches `.session.json`, because those manifests are read back as live
 sessions by `loadRecordedSessionForVideoPath` — a persisted target would resurface
 later and point an unrelated project's video at a stale project. It is retired when the
 session slot is set to `null` (which the import does once it has consumed the take),
-when a take ends in any non-`ready` outcome, and on every project-file load, so a
-target cannot outlive the recording it was armed for.
+when the HUD abandons a take before any recording exists and sends `clear-take-target`
+(a cancelled countdown, a dismissed source picker, a refused or failed start), when a
+take ends in a non-`ready` outcome — unless that outcome carries `keepTarget`, which
+only Restart sends, since the take it discards is followed by another one in the same
+session — and on every project-file load or `set-current-video-path`, which publish a
+session nothing armed it for.
 
 The editor imports such a take by appending to that project: `loadProject` the target,
 then ask the store afterwards whether it landed — `loadProject` reports failure by
 setting `status` and returning, it never throws, so a fallback written as `try/catch`
 would be dead code — keep the live document when it already is that project rather
-than reloading over edits made since the take started, `addAsset`, and then
-`useTimeline.appendTakeClip` places one clip after the last and runs the background
-duration probe. The probe is load-bearing rather than defensive: `addAsset` never sets
-`durationSec`, and `Preview` mounts only the primary asset, so no `loadedmetadata`
-arrives for a later take and its clip would stay at the 60 s placeholder. Automatic
-zoom decoration is keyed by asset, not by project, so a project that already holds
-zooms still gets them for the take that just landed.
+than reloading over it, `addAsset`, and then `useTimeline.appendTakeClip` places one
+clip after the last and runs the background duration probe. The probe is load-bearing
+rather than defensive: `addAsset` never sets `durationSec`, and the import only moves
+the store's `currentTime`, not a seek, so nothing it does guarantees the preview swaps
+onto the new take promptly. `Preview.previewSources` does list every clip-referenced
+source and `VirtualPreview` mounts one at a time following the playhead, so the take's
+`loadedmetadata` arrives once the preview reaches it — from then on. Until it does, its
+clip stays at the 60 s placeholder and automatic zoom, which waits for this take's
+measured length, refuses to decorate it. The probe measures the file at once and
+persists that. Automatic zoom decoration is keyed by asset, not by project, so a
+project that already holds zooms still gets them for the take that just landed.
 
 ## The HUD
 

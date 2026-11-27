@@ -268,6 +268,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	reportRecordingOutcome: (outcome: import("../src/lib/recordingSession").RecordingOutcome) =>
 		ipcRenderer.invoke("recording-outcome", outcome),
+	clearTakeTarget: () => ipcRenderer.invoke("clear-take-target"),
 
 	setRecordingState: (
 		recording: boolean,

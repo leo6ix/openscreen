@@ -49,6 +49,9 @@ interface Window {
 		reportRecordingOutcome?: (
 			outcome: import("../src/lib/recordingSession").RecordingOutcome,
 		) => Promise<{ success: boolean }>;
+		/** Retires the project an editor-started take was armed for, when the HUD abandons
+		 *  the take before any recording exists to report an outcome for. */
+		clearTakeTarget?: () => Promise<{ success: boolean }>;
 
 		getSources: (opts: Electron.SourcesOptions) => Promise<ProcessedDesktopSource[]>;
 		switchToEditor: () => Promise<void>;

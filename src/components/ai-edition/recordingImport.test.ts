@@ -383,6 +383,78 @@ describe("recording a take into the open project", () => {
 		expect(appendTakeClip).not.toHaveBeenCalled();
 	});
 
+	// `appendTakeClip` places the clip and saves; a failed save returns null, and the
+	// take must still be on the project as an asset rather than lost.
+	it("keeps the take as an asset when the append reports no clip", async () => {
+		const onImported = vi.fn();
+		stubElectronApi(SCREEN_PATH, "system", undefined, OPEN_PROJECT_ID);
+
+		await importPendingRecording(undefined, {
+			appendTakeClip: vi.fn(async () => null),
+			onImported,
+		});
+
+		expect(addAsset).toHaveBeenCalledWith(SCREEN_PATH, expect.stringMatching(/^Take 2 — /));
+		expect(useProjectStore.getState().document?.assets).toHaveLength(2);
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+		expect(useProjectStore.getState().currentTimeSec).toBe(0);
+		expect(onImported).toHaveBeenCalledWith(expect.objectContaining({ appended: false }));
+	});
+
+	// No `appendTakeClip` at all: there is no correct length to place the clip at (see
+	// the deps doc), so the take stays in the media panel and the log says why.
+	it("places no clip and warns when no append was supplied", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const onImported = vi.fn();
+		stubElectronApi(SCREEN_PATH, "system", undefined, OPEN_PROJECT_ID);
+
+		await importPendingRecording(undefined, { onImported });
+
+		expect(warn).toHaveBeenCalledWith(
+			"[recording] take added without a clip: no appendTakeClip supplied",
+		);
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+		expect(onImported).toHaveBeenCalledWith(expect.objectContaining({ appended: false }));
+		warn.mockRestore();
+	});
+
+	it("appends into a target project that has no clips yet", async () => {
+		loadProject.mockImplementationOnce(async (projectId: string) => {
+			useProjectStore.setState({
+				projectId,
+				document: projectDocument(OPEN_PROJECT_ID, "Open project", [
+					videoAsset("asset_1", "/recordings/take-1.mp4"),
+				]),
+				status: "ready",
+				error: null,
+			});
+		});
+		const appendTakeClip = vi.fn(async () => {
+			const current = useProjectStore.getState().document;
+			if (!current) return null;
+			useProjectStore.setState({
+				document: insertAssetClip(current, 0, {
+					id: "clip_1",
+					assetId: "asset_2",
+					sourceStartSec: 0,
+					sourceEndSec: 60,
+					origin: "user",
+					reason: "Take 2",
+				}),
+			});
+			return "clip_1";
+		});
+		const onImported = vi.fn();
+		stubElectronApi(SCREEN_PATH, "system", undefined, OPEN_PROJECT_ID);
+
+		await importPendingRecording(undefined, { appendTakeClip, onImported });
+
+		expect(appendTakeClip).toHaveBeenCalledWith("asset_2", "Take 2");
+		expect(onImported).toHaveBeenCalledWith(
+			expect.objectContaining({ takeNumber: 2, appended: true }),
+		);
+	});
+
 	// Opening a project is not a take: whatever the editor armed before it is spent.
 	it("consumes the target once the take is on the project", async () => {
 		const api = stubElectronApi(SCREEN_PATH, "system", undefined, OPEN_PROJECT_ID);
