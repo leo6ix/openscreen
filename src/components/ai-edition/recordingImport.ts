@@ -43,7 +43,7 @@ import { nativeBridgeClient } from "@/native/client";
 // The recording path is what scopes it: `importPendingRecording` always has one,
 // and it is what stops a flag left over from a take with nothing to zoom from
 // decorating the next document loaded in the same window. A successful save
-// records the project id so a later undo or delete cannot silently re-seed it.
+// records the take's asset path so a later undo or delete cannot silently re-seed it.
 let pendingFreshRecordingAutoZoom = false;
 let pendingFreshRecordingAutoZoomPath: string | null = null;
 /**
@@ -485,9 +485,12 @@ export async function importPendingRecording(
 		// Did this take start from an open project? Only then is it a take rather than
 		// the recording the project gets built around. Asked of the store AFTER the load,
 		// not of the returned promise: `loadProject` reports failure by setting `status`
-		// and RETURNING, so a target that was deleted since the editor closed leaves
-		// `projectId` empty here and falls through to a new project below.
+		// and RETURNING, so a target deleted since the editor closed has to be read back
+		// from the store — including the fact that it left a previous project in place.
 		let joinsOpenProject = false;
+		// A lost target must not hand the take to whatever project the window already
+		// holds, which is what `loadProject` leaves behind when it fails.
+		let targetLost = false;
 		if (targetProjectId) {
 			// Normally the window was destroyed for the take (`switchToHudWrapper`), so the
 			// project has to be read back from disk. `alreadyOpen` is defence for a host
@@ -497,10 +500,11 @@ export async function importPendingRecording(
 			if (!alreadyOpen) await store().loadProject(targetProjectId);
 			joinsOpenProject = store().projectId === targetProjectId && store().document != null;
 			if (!joinsOpenProject) {
+				targetLost = true;
 				deps.onTargetUnavailable?.();
 			}
 		}
-		if (!store().projectId) {
+		if (targetLost || !store().projectId) {
 			await store().createProject(`Recording ${new Date().toLocaleString()}`);
 		}
 		// The store is the authority here: `reportReadyRecording` compares the document's

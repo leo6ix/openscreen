@@ -372,6 +372,54 @@ describe("recording a take into the open project", () => {
 		});
 	});
 
+	// A host that keeps the editor alive can hold a different project when the target
+	// fails to open. `loadProject` leaves that project in place, so the fallback has to
+	// replace it rather than appending the take into a project it was not recorded for.
+	it("does not append to the open project when the target is gone", async () => {
+		const otherAsset = videoAsset("asset_other", "/recordings/other.mp4");
+		useProjectStore.setState({
+			projectId: "project_other",
+			document: insertAssetClip(
+				projectDocument("project_other", "Other project", [otherAsset]),
+				0,
+				{
+					id: "clip_other",
+					assetId: otherAsset.id,
+					sourceStartSec: 0,
+					sourceEndSec: 30,
+					origin: "user",
+					reason: "Other",
+				},
+			),
+			status: "ready",
+			error: null,
+		});
+		loadProject.mockImplementationOnce(async () => {
+			useProjectStore.setState({ status: "error", error: "Project not found" });
+		});
+		const appendTakeClip = vi.fn(async () => "clip_2");
+		const onTargetUnavailable = vi.fn();
+		const onImported = vi.fn();
+		stubElectronApi(SCREEN_PATH, "system", undefined, OPEN_PROJECT_ID);
+
+		await importPendingRecording(undefined, {
+			appendTakeClip,
+			onTargetUnavailable,
+			onImported,
+		});
+
+		expect(onTargetUnavailable).toHaveBeenCalledTimes(1);
+		expect(createProject).toHaveBeenCalledTimes(1);
+		expect(appendTakeClip).not.toHaveBeenCalled();
+		expect(useProjectStore.getState().projectId).toBe(NEW_PROJECT_ID);
+		expect(useProjectStore.getState().document?.assets).toHaveLength(1);
+		expect(onImported).toHaveBeenCalledWith({
+			projectTitle: expect.any(String),
+			takeNumber: 1,
+			appended: false,
+		});
+	});
+
 	it("creates a project when no target was armed", async () => {
 		const appendTakeClip = vi.fn(async () => "clip_2");
 		stubElectronApi(SCREEN_PATH, "system");
