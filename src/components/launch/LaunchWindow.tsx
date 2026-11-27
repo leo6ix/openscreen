@@ -757,6 +757,14 @@ export function LaunchWindow() {
 		webcamEnabled,
 		toggleRecording,
 	]);
+	/**
+	 * Retires the project target an editor-started take was armed with, for a take that
+	 * will never happen. Main retires it on a failed or cancelled outcome; these paths
+	 * stop before any recording exists, so nothing else says the take is over.
+	 */
+	const abandonArmedTakeTarget = useCallback(() => {
+		void window.electronAPI?.clearTakeTarget?.();
+	}, []);
 	const startWhenDevicesReady = useCallback(() => {
 		if (startWhenDevicesReadyInFlight.current) {
 			return startWhenDevicesReadyInFlight.current;
@@ -781,6 +789,8 @@ export function LaunchWindow() {
 					await new Promise((resolve) => setTimeout(resolve, 25));
 				}
 				console.warn("Recording did not start because device preferences could not be resolved.");
+				// A take no device could start is not the take an editor armed a project for.
+				abandonArmedTakeTarget();
 			} finally {
 				if (startWhenDevicesReadyInFlight.current === pending) {
 					startWhenDevicesReadyInFlight.current = null;
@@ -789,7 +799,7 @@ export function LaunchWindow() {
 			}
 		})();
 		return pending;
-	}, []);
+	}, [abandonArmedTakeTarget]);
 
 	// The main process pushes every change through `onSelectedSourceChanged`, so
 	// this only needs one read to seed the initial value (plus one on focus, in
@@ -836,7 +846,7 @@ export function LaunchWindow() {
 			// A picker closed while the HUD was still waiting for a selection to record
 			// after: it was dismissed, so no take follows and the project main armed for
 			// it is spent. A selection clears the flag first, and then this is a no-op.
-			if (recordAfterSourceSelectionRef.current) void window.electronAPI?.clearTakeTarget?.();
+			if (recordAfterSourceSelectionRef.current) abandonArmedTakeTarget();
 			recordAfterSourceSelectionRef.current = false;
 		});
 
@@ -844,7 +854,7 @@ export function LaunchWindow() {
 			cleanupSourceChanged?.();
 			cleanupSelectorClosed?.();
 		};
-	}, [applySelectedSource, recording, startWhenDevicesReady]);
+	}, [abandonArmedTakeTarget, applySelectedSource, recording, startWhenDevicesReady]);
 
 	const openSourceSelector = useCallback(async () => {
 		// A missing macOS permission is handled on the main side: it opens the permissions
@@ -886,10 +896,15 @@ export function LaunchWindow() {
 						// whatever the local state has caught up to.
 						if (result.reason === "portal-owns-selection" && !recording) {
 							void startWhenDevicesReady();
+							return;
 						}
+						// Refused for any other reason: no picker, no take, so an armed
+						// project target is spent.
+						abandonArmedTakeTarget();
 					})
 					.catch(() => {
 						recordAfterSourceSelectionRef.current = false;
+						abandonArmedTakeTarget();
 					});
 				return;
 			}
@@ -897,6 +912,7 @@ export function LaunchWindow() {
 			void startWhenDevicesReady();
 		},
 		[
+			abandonArmedTakeTarget,
 			hasSelectedSource,
 			portalOwnsSource,
 			openSourceSelector,

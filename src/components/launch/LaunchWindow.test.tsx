@@ -276,6 +276,7 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 		...window.electronAPI,
 		getSelectedSource,
 		openSourceSelector: vi.fn(async () => ({ opened: true })),
+		clearTakeTarget: vi.fn(async () => ({ success: true })),
 		getLastPickedSource: vi.fn(async () => lastPickedSourceName),
 		// Follows the platform under test. Pinned to "darwin" before, which was
 		// invisible while only `nativeBridgeClient` was consulted for it — and
@@ -856,6 +857,7 @@ describe("LaunchWindow record button", () => {
 			);
 		});
 		expect(recorderState.value.toggleRecording).not.toHaveBeenCalled();
+		expect(window.electronAPI.clearTakeTarget).toHaveBeenCalledTimes(1);
 	});
 
 	it("clears record-after-selection intent when opening the source picker fails", async () => {
@@ -883,6 +885,22 @@ describe("LaunchWindow record button", () => {
 				"aria-label",
 				"Start recording",
 			);
+		});
+		expect(recorderState.value.toggleRecording).not.toHaveBeenCalled();
+		expect(window.electronAPI.clearTakeTarget).toHaveBeenCalledTimes(1);
+	});
+
+	it("retires the armed take target when the source picker refuses to open", async () => {
+		window.electronAPI.openSourceSelector = vi.fn(async () => ({
+			opened: false,
+			reason: "screen-access-required",
+		})) as unknown as Window["electronAPI"]["openSourceSelector"];
+
+		renderLaunchWindow();
+		fireEvent.click(await screen.findByTestId("launch-record-button"));
+
+		await waitFor(() => {
+			expect(window.electronAPI.clearTakeTarget).toHaveBeenCalledTimes(1);
 		});
 		expect(recorderState.value.toggleRecording).not.toHaveBeenCalled();
 	});
@@ -1220,6 +1238,7 @@ describe("LaunchWindow record button", () => {
 		await waitFor(() => {
 			expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
 		});
+		expect(window.electronAPI.clearTakeTarget).not.toHaveBeenCalled();
 	});
 
 	it("does not name a source while recording on Linux", async () => {
